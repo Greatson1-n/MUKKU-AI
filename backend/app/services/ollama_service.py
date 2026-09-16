@@ -166,6 +166,12 @@ class OllamaService:
             return await self._generate_groq(prompt, model, system, options, format_type)
         return await self._generate_ollama(prompt, model, system, options, format_type, images)
 
+    def _sanitize_groq_model(self, model: Optional[str]) -> str:
+        """Ensures the model name sent to Groq is a valid cloud model, not a local Ollama tag."""
+        if not model or ":" in model or model == settings.OLLAMA_MODEL or "qwen2.5:3b" in model:
+            return settings.GROQ_MODEL or "llama-3.3-70b-versatile"
+        return model
+
     async def _generate_groq(
         self,
         prompt: str,
@@ -179,7 +185,7 @@ class OllamaService:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
-        selected_model = model or settings.GROQ_MODEL
+        selected_model = self._sanitize_groq_model(model)
         payload: Dict[str, Any] = {
             "model": selected_model,
             "messages": messages,
@@ -195,9 +201,20 @@ class OllamaService:
                 if res.status_code == 200:
                     data = res.json()
                     return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-                else:
-                    logger.error(f"Groq generate error HTTP {res.status_code}: {res.text}")
-                    return f"Error: Groq HTTP {res.status_code}"
+                elif res.status_code == 404 and selected_model != "llama-3.3-70b-versatile":
+                    # Fallback to standard Groq model if configured model not found
+                    payload["model"] = "llama-3.3-70b-versatile"
+                    res2 = await client.post(f"{self.groq_base_url}/chat/completions", json=payload, headers=headers)
+                    if res2.status_code == 200:
+                        return res2.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+
+                error_msg = f"HTTP {res.status_code}"
+                try:
+                    error_msg = res.json().get("error", {}).get("message", error_msg)
+                except Exception:
+                    pass
+                logger.error(f"Groq generate error: {error_msg}")
+                return f"Error: Groq returned {error_msg}"
         except Exception as e:
             logger.error(f"Groq generate exception: {e}")
             return f"Error connecting to cloud AI service: {str(e)}"
@@ -258,7 +275,7 @@ class OllamaService:
         model: Optional[str] = None,
         options: Optional[Dict[str, Any]] = None
     ) -> AsyncGenerator[str, None]:
-        selected_model = model or settings.GROQ_MODEL
+        selected_model = self._sanitize_groq_model(model)
         temperature = options.get("temperature", 0.7) if options else 0.7
         top_p = options.get("top_p", 0.9) if options else 0.9
         max_tokens = options.get("num_predict", 2048) if options else 2048
@@ -280,14 +297,51 @@ class OllamaService:
                     f"{self.groq_base_url}/chat/completions",
                     json=payload,
                     headers=headers
-                ) as response:
-                    if response.status_code != 200:
-                        error_text = await response.aread()
-                        logger.error(f"Groq stream error HTTP {response.status_code}: {error_text.decode('utf-8', errors='ignore')}")
-                        yield f"Error: Groq returned status {response.status_code}"
+                ) as stream_resp:
+                    # Fallback to standard Groq model if configured model not found (404)
+                    if stream_resp.status_code == 404 and selected_model != "llama-3.3-70b-versatile":
+                        logger.warning(f"Groq model {selected_model} not found (404). Retrying with llama-3.3-70b-versatile.")
+                        payload["model"] = "llama-3.3-70b-versatile"
+                        async with client.stream(
+                            "POST",
+                            f"{self.groq_base_url}/chat/completions",
+                            json=payload,
+                            headers=headers
+                        ) as fb_resp:
+                            if fb_resp.status_code != 200:
+                                err_text = await fb_resp.aread()
+                                yield f"Error: Groq returned {fb_resp.status_code}"
+                                return
+                            async for line in fb_resp.aiter_lines():
+                                if not line or not line.startswith("data: "):
+                                    continue
+                                raw_data = line[6:].strip()
+                                if raw_data == "[DONE]":
+                                    break
+                                try:
+                                    chunk = json.loads(raw_data)
+                                    choices = chunk.get("choices", [])
+                                    if choices:
+                                        content = choices[0].get("delta", {}).get("content", "")
+                                        if content:
+                                            yield content
+                                except Exception:
+                                    pass
                         return
 
-                    async for line in response.aiter_lines():
+                    if stream_resp.status_code != 200:
+                        error_text = await stream_resp.aread()
+                        detail = f"status {stream_resp.status_code}"
+                        try:
+                            err_json = json.loads(error_text.decode('utf-8', errors='ignore'))
+                            detail = err_json.get("error", {}).get("message", detail)
+                        except Exception:
+                            pass
+                        logger.error(f"Groq stream error: {detail}")
+                        yield f"Error: Groq returned {detail}"
+                        return
+
+                    async for line in stream_resp.aiter_lines():
                         if not line or not line.startswith("data: "):
                             continue
                         raw_data = line[6:].strip()

@@ -40,11 +40,12 @@ async def sse_chat_generator(
 
         if not conv:
             is_new_conv = True
+            default_model = settings.GROQ_MODEL if settings.LLM_PROVIDER.lower() == "groq" else settings.OLLAMA_MODEL
             conv = Conversation(
                 id=str(uuid.uuid4()),
                 user_id=user_id,
                 title="New Chat",
-                model_name=req.model or settings.OLLAMA_MODEL,
+                model_name=req.model or default_model,
                 system_prompt=req.system_prompt
             )
             db.add(conv)
@@ -131,9 +132,11 @@ async def sse_chat_generator(
         }
 
         full_response_chunks = []
+        default_model = settings.GROQ_MODEL if settings.LLM_PROVIDER.lower() == "groq" else settings.OLLAMA_MODEL
+        target_model = req.model or conv.model_name or default_model
         async for token in ollama_service.chat_stream(
             messages=messages,
-            model=req.model or conv.model_name or settings.OLLAMA_MODEL,
+            model=target_model,
             options=model_options
         ):
             full_response_chunks.append(token)
