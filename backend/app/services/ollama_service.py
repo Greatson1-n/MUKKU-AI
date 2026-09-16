@@ -167,10 +167,11 @@ class OllamaService:
         return await self._generate_ollama(prompt, model, system, options, format_type, images)
 
     def _sanitize_groq_model(self, model: Optional[str]) -> str:
-        """Ensures the model name sent to Groq is a valid cloud model, not a local Ollama tag."""
-        if not model or ":" in model or model == settings.OLLAMA_MODEL or "qwen2.5:3b" in model:
-            return settings.GROQ_MODEL or "llama-3.3-70b-versatile"
-        return model
+        """Ensures the model name sent to Groq is a valid active cloud model."""
+        target = model or settings.GROQ_MODEL
+        if not target or ":" in target or target in [settings.OLLAMA_MODEL, "qwen2.5:3b", "qwen-2.5-32b"]:
+            return "llama-3.3-70b-versatile"
+        return target
 
     async def _generate_groq(
         self,
@@ -298,37 +299,6 @@ class OllamaService:
                     json=payload,
                     headers=headers
                 ) as stream_resp:
-                    # Fallback to standard Groq model if configured model not found (404)
-                    if stream_resp.status_code == 404 and selected_model != "llama-3.3-70b-versatile":
-                        logger.warning(f"Groq model {selected_model} not found (404). Retrying with llama-3.3-70b-versatile.")
-                        payload["model"] = "llama-3.3-70b-versatile"
-                        async with client.stream(
-                            "POST",
-                            f"{self.groq_base_url}/chat/completions",
-                            json=payload,
-                            headers=headers
-                        ) as fb_resp:
-                            if fb_resp.status_code != 200:
-                                err_text = await fb_resp.aread()
-                                yield f"Error: Groq returned {fb_resp.status_code}"
-                                return
-                            async for line in fb_resp.aiter_lines():
-                                if not line or not line.startswith("data: "):
-                                    continue
-                                raw_data = line[6:].strip()
-                                if raw_data == "[DONE]":
-                                    break
-                                try:
-                                    chunk = json.loads(raw_data)
-                                    choices = chunk.get("choices", [])
-                                    if choices:
-                                        content = choices[0].get("delta", {}).get("content", "")
-                                        if content:
-                                            yield content
-                                except Exception:
-                                    pass
-                        return
-
                     if stream_resp.status_code != 200:
                         error_text = await stream_resp.aread()
                         detail = f"status {stream_resp.status_code}"
@@ -337,6 +307,35 @@ class OllamaService:
                             detail = err_json.get("error", {}).get("message", detail)
                         except Exception:
                             pass
+
+                        # If model is decommissioned or not found, automatically fallback to llama-3.3-70b-versatile
+                        if selected_model != "llama-3.3-70b-versatile" and any(k in detail.lower() for k in ["decommissioned", "not found", "does not exist", "404"]):
+                            logger.warning(f"Groq model {selected_model} issue ({detail}). Retrying with llama-3.3-70b-versatile.")
+                            payload["model"] = "llama-3.3-70b-versatile"
+                            async with client.stream(
+                                "POST",
+                                f"{self.groq_base_url}/chat/completions",
+                                json=payload,
+                                headers=headers
+                            ) as fb_resp:
+                                if fb_resp.status_code == 200:
+                                    async for line in fb_resp.aiter_lines():
+                                        if not line or not line.startswith("data: "):
+                                            continue
+                                        raw_data = line[6:].strip()
+                                        if raw_data == "[DONE]":
+                                            break
+                                        try:
+                                            chunk = json.loads(raw_data)
+                                            choices = chunk.get("choices", [])
+                                            if choices:
+                                                content = choices[0].get("delta", {}).get("content", "")
+                                                if content:
+                                                    yield content
+                                        except Exception:
+                                            pass
+                                    return
+
                         logger.error(f"Groq stream error: {detail}")
                         yield f"Error: Groq returned {detail}"
                         return
