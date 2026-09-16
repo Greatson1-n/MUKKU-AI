@@ -154,6 +154,10 @@ class OllamaStatusResponse(BaseModel):
     vision_model_installed: bool
     available_models: List[OllamaModelItem] = []
     error: Optional[str] = None
+    provider: Optional[str] = None
+
+    class Config:
+        extra = "ignore"
 
 # App Settings
 class SettingsUpdate(BaseModel):
