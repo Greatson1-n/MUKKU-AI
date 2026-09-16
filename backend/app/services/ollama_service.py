@@ -36,6 +36,7 @@ class OllamaService:
         self.embed_model = settings.EMBEDDING_MODEL
         self.vision_model = settings.VISION_MODEL
         self.groq_base_url = "https://api.groq.com/openai/v1"
+        self._cached_groq_models: Optional[List[str]] = None
 
     @property
     def is_groq(self) -> bool:
@@ -166,12 +167,49 @@ class OllamaService:
             return await self._generate_groq(prompt, model, system, options, format_type)
         return await self._generate_ollama(prompt, model, system, options, format_type, images)
 
-    def _sanitize_groq_model(self, model: Optional[str]) -> str:
-        """Ensures the model name sent to Groq is a valid active cloud model."""
-        target = model or settings.GROQ_MODEL
-        if not target or ":" in target or target in [settings.OLLAMA_MODEL, "qwen2.5:3b", "qwen-2.5-32b"]:
-            return "llama-3.3-70b-versatile"
-        return target
+    async def _get_active_groq_model(self, model: Optional[str] = None) -> str:
+        """Finds the best available model on the user's Groq account dynamically."""
+        if not self._cached_groq_models:
+            try:
+                headers = {"Authorization": f"Bearer {settings.GROQ_API_KEY}"}
+                async with httpx.AsyncClient(timeout=6.0) as client:
+                    res = await client.get(f"{self.groq_base_url}/models", headers=headers)
+                    if res.status_code == 200:
+                        self._cached_groq_models = [m.get("id") for m in res.json().get("data", [])]
+                        logger.info(f"Loaded {len(self._cached_groq_models)} available Groq models: {self._cached_groq_models}")
+            except Exception as e:
+                logger.warning(f"Could not fetch Groq models list: {e}")
+
+        available = self._cached_groq_models or []
+        
+        # Priority list of current active Groq chat models
+        priority = [
+            "llama-3.1-8b-instant",
+            "llama-3.2-3b-preview",
+            "llama-3.2-1b-preview",
+            "llama-3.3-70b-versatile",
+            "gemma2-9b-it",
+            "mixtral-8x7b-32768"
+        ]
+
+        # If model is explicitly passed, not local tag, and present in Groq, use it
+        if model and ":" not in model and model in available and model not in ["qwen-2.5-32b", "qwen2.5:3b"]:
+            return model
+
+        # If user configured a valid model in GROQ_MODEL and it's active in their account, use it
+        if settings.GROQ_MODEL and settings.GROQ_MODEL in available and settings.GROQ_MODEL not in ["qwen-2.5-32b", "qwen2.5:3b", "llama-3.3-70b-versatile"]:
+            return settings.GROQ_MODEL
+
+        for p in priority:
+            if p in available:
+                return p
+
+        # Fallback to the first non-whisper model
+        text_models = [m for m in available if "whisper" not in m.lower()]
+        if text_models:
+            return text_models[0]
+
+        return "llama-3.1-8b-instant"
 
     async def _generate_groq(
         self,
@@ -186,7 +224,7 @@ class OllamaService:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
-        selected_model = self._sanitize_groq_model(model)
+        selected_model = await self._get_active_groq_model(model)
         payload: Dict[str, Any] = {
             "model": selected_model,
             "messages": messages,
@@ -202,9 +240,11 @@ class OllamaService:
                 if res.status_code == 200:
                     data = res.json()
                     return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-                elif res.status_code == 404 and selected_model != "llama-3.3-70b-versatile":
-                    # Fallback to standard Groq model if configured model not found
-                    payload["model"] = "llama-3.3-70b-versatile"
+
+                # If failed due to model issue, invalidate cache and retry with llama-3.1-8b-instant
+                if res.status_code in [400, 404]:
+                    self._cached_groq_models = None
+                    payload["model"] = "llama-3.1-8b-instant"
                     res2 = await client.post(f"{self.groq_base_url}/chat/completions", json=payload, headers=headers)
                     if res2.status_code == 200:
                         return res2.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
@@ -276,7 +316,7 @@ class OllamaService:
         model: Optional[str] = None,
         options: Optional[Dict[str, Any]] = None
     ) -> AsyncGenerator[str, None]:
-        selected_model = self._sanitize_groq_model(model)
+        selected_model = await self._get_active_groq_model(model)
         temperature = options.get("temperature", 0.7) if options else 0.7
         top_p = options.get("top_p", 0.9) if options else 0.9
         max_tokens = options.get("num_predict", 2048) if options else 2048
@@ -308,10 +348,11 @@ class OllamaService:
                         except Exception:
                             pass
 
-                        # If model is decommissioned or not found, automatically fallback to llama-3.3-70b-versatile
-                        if selected_model != "llama-3.3-70b-versatile" and any(k in detail.lower() for k in ["decommissioned", "not found", "does not exist", "404"]):
-                            logger.warning(f"Groq model {selected_model} issue ({detail}). Retrying with llama-3.3-70b-versatile.")
-                            payload["model"] = "llama-3.3-70b-versatile"
+                        # If model is decommissioned, not found, or access restricted, fallback to llama-3.1-8b-instant
+                        if selected_model != "llama-3.1-8b-instant" and any(k in detail.lower() for k in ["decommissioned", "not found", "does not exist", "404", "access"]):
+                            logger.warning(f"Groq model {selected_model} issue ({detail}). Retrying with llama-3.1-8b-instant.")
+                            payload["model"] = "llama-3.1-8b-instant"
+                            self._cached_groq_models = None
                             async with client.stream(
                                 "POST",
                                 f"{self.groq_base_url}/chat/completions",
