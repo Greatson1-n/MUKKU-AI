@@ -133,6 +133,23 @@ export default function App() {
     }
   };
 
+  const handleAuthSuccess = async (user) => {
+    setCurrentUser(user);
+    setCurrentId(null);
+    setMessages([]);
+    setInput('');
+    try {
+      const list = await apiConversations.list();
+      setConversations(list);
+      if (list.length > 0) {
+        selectConversation(list[0].id);
+      }
+    } catch (e) {
+      console.error('Error reloading user conversations:', e);
+      setConversations([]);
+    }
+  };
+
   const selectConversation = async (id) => {
     if (streaming) return;
     setCurrentId(id);
@@ -477,7 +494,7 @@ export default function App() {
         isOpen={isAuthOpen}
         onClose={() => setIsAuthOpen(false)}
         currentUser={currentUser}
-        onAuthSuccess={(u) => setCurrentUser(u)}
+        onAuthSuccess={handleAuthSuccess}
       />
     </div>
   );
