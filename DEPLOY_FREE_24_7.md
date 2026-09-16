@@ -62,7 +62,7 @@ If your code is not already on GitHub:
      ```
    - **Start Command:**
      ```bash
-     python -m uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port $PORT
+     python backend/run.py
      ```
    - **Instance Type:** Select **Free** (0.5 CPU, 512 MB RAM).
 5. Scroll down to **Environment Variables** and add the following:
