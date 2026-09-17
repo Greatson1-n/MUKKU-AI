@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Bot, Trash2, Sliders, Volume2, Menu } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Bot, Trash2, Sliders, Volume2, Menu, ArrowUp, Loader2 } from 'lucide-react';
 import {
   apiConversations,
   apiOllama,
@@ -8,6 +8,20 @@ import {
   apiDocuments,
   streamChatResponse,
 } from './api/client';
+import {
+  cacheConversations,
+  getCachedConversations,
+  saveCachedConversation,
+  deleteCachedConversation,
+  clearAllCache,
+  cacheMessages,
+  getCachedMessages,
+  saveCachedMessage,
+  deleteCachedMessage,
+  enqueueOfflineMessage,
+  getOfflineQueue,
+  removeOfflineQueueItem,
+} from './api/db';
 import { useSpeech } from './hooks/useSpeech';
 
 import Sidebar from './components/Sidebar';
@@ -30,6 +44,10 @@ export default function App() {
   const [activeTool, setActiveTool] = useState(null);
   const [activeCitations, setActiveCitations] = useState(null);
 
+  // Pagination
+  const [hasMoreMessages, setHasMoreMessages] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+
   // Attachment & Toggles
   const [webSearch, setWebSearch] = useState(false);
   const [memoryEnabled, setMemoryEnabled] = useState(true);
@@ -50,6 +68,7 @@ export default function App() {
 
   const abortControllerRef = useRef(null);
   const messagesEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
 
   const {
     speechSupported,
@@ -62,20 +81,32 @@ export default function App() {
     stopSpeaking,
   } = useSpeech();
 
-  // Scroll to bottom
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  // Scroll to bottom helper
+  const scrollToBottom = (behavior = 'smooth') => {
+    messagesEndRef.current?.scrollIntoView({ behavior });
   };
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages, streamContent, activeTool]);
+    if (!isLoadingMore) {
+      scrollToBottom();
+    }
+  }, [messages.length, streamContent, activeTool]);
 
-  // Initial Load
+  // Initial Load & Health check
   useEffect(() => {
     initApp();
     const interval = setInterval(checkOllamaHealth, 10000);
-    return () => clearInterval(interval);
+
+    // Sync offline queue when network reconnects
+    const handleOnline = () => {
+      syncOfflineQueue();
+    };
+    window.addEventListener('online', handleOnline);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('online', handleOnline);
+    };
   }, []);
 
   // Theme application
@@ -87,7 +118,22 @@ export default function App() {
 
   const initApp = async () => {
     try {
-      // 1. Auth check
+      // 1. Instantly hydrate from local IndexedDB cache before network finishes
+      const cachedConvs = await getCachedConversations();
+      if (cachedConvs && cachedConvs.length > 0) {
+        setConversations(cachedConvs);
+        const savedConvId = localStorage.getItem('mukku_last_conv_id');
+        const targetId = cachedConvs.some((c) => c.id === savedConvId) ? savedConvId : cachedConvs[0].id;
+        if (targetId) {
+          setCurrentId(targetId);
+          const cachedMsgs = await getCachedMessages(targetId);
+          if (cachedMsgs && cachedMsgs.length > 0) {
+            setMessages(cachedMsgs);
+          }
+        }
+      }
+
+      // 2. Auth check
       let user;
       try {
         user = await apiAuth.getMe();
@@ -97,17 +143,17 @@ export default function App() {
       }
       setCurrentUser(user);
 
-      // 2. Load settings
+      // 3. Load settings
       const s = await apiSettings.get();
       setSettings(s);
       setWebSearch(s.web_search_enabled || false);
       setMemoryEnabled(s.memory_enabled !== false);
 
-      // 3. Load Ollama Status
+      // 4. Load Ollama Status
       checkOllamaHealth();
 
-      // 4. Load conversations
-      loadConversations();
+      // 5. Load authoritative conversations from server
+      await loadConversations();
     } catch (e) {
       console.error('App init error:', e);
     }
@@ -122,32 +168,41 @@ export default function App() {
     }
   };
 
-  const loadConversations = async () => {
+  const loadConversations = async (preserveSelectedId = true) => {
     try {
       const list = await apiConversations.list();
       setConversations(list);
-      if (list.length > 0 && !currentId) {
-        selectConversation(list[0].id);
+      await cacheConversations(list);
+
+      const savedConvId = localStorage.getItem('mukku_last_conv_id');
+      const targetId = preserveSelectedId && savedConvId && list.some((c) => c.id === savedConvId)
+        ? savedConvId
+        : list.length > 0 ? list[0].id : null;
+
+      if (targetId && targetId !== currentId) {
+        selectConversation(targetId);
+      } else if (targetId && targetId === currentId) {
+        // Refresh messages for current
+        fetchMessages(targetId);
       }
     } catch (e) {
       console.error('Error loading conversations:', e);
     }
   };
 
-  const handleAuthSuccess = async (user) => {
-    setCurrentUser(user);
-    setCurrentId(null);
-    setMessages([]);
-    setInput('');
+  const fetchMessages = async (convId) => {
     try {
-      const list = await apiConversations.list();
-      setConversations(list);
-      if (list.length > 0) {
-        selectConversation(list[0].id);
-      }
+      const res = await apiConversations.getMessages(convId, { limit: 50 });
+      setMessages(res.messages || []);
+      setHasMoreMessages(res.has_more || false);
+      await cacheMessages(res.messages || []);
     } catch (e) {
-      console.error('Error reloading user conversations:', e);
-      setConversations([]);
+      console.error('Error fetching messages:', e);
+      // Fallback to local cache if network fails
+      const cached = await getCachedMessages(convId);
+      if (cached && cached.length > 0) {
+        setMessages(cached);
+      }
     }
   };
 
@@ -155,11 +210,40 @@ export default function App() {
     if (streaming) return;
     setIsMobileSidebarOpen(false);
     setCurrentId(id);
+    localStorage.setItem('mukku_last_conv_id', id);
+
+    // Instant local cache display
+    const cached = await getCachedMessages(id);
+    if (cached && cached.length > 0) {
+      setMessages(cached);
+    }
+
+    // Server source of truth fetch
+    await fetchMessages(id);
+  };
+
+  const handleLoadEarlierMessages = async () => {
+    if (!currentId || !hasMoreMessages || isLoadingMore || messages.length === 0) return;
+    setIsLoadingMore(true);
+
     try {
-      const detail = await apiConversations.get(id);
-      setMessages(detail.messages || []);
+      const oldestMessageId = messages[0].id;
+      const res = await apiConversations.getMessages(currentId, {
+        limit: 50,
+        before: oldestMessageId,
+      });
+
+      if (res.messages && res.messages.length > 0) {
+        setMessages((prev) => [...res.messages, ...prev]);
+        setHasMoreMessages(res.has_more || false);
+        await cacheMessages(res.messages);
+      } else {
+        setHasMoreMessages(false);
+      }
     } catch (e) {
-      console.error('Error fetching conversation details:', e);
+      console.error('Error loading earlier messages:', e);
+    } finally {
+      setIsLoadingMore(false);
     }
   };
 
@@ -167,18 +251,23 @@ export default function App() {
     if (streaming) return;
     setIsMobileSidebarOpen(false);
     setCurrentId(null);
+    localStorage.removeItem('mukku_last_conv_id');
     setMessages([]);
     setInput('');
     setSelectedFile(null);
     setImageBase64(null);
     setActiveTool(null);
     setActiveCitations(null);
+    setHasMoreMessages(false);
   };
 
   const handleRename = async (id, newTitle) => {
     try {
       await apiConversations.update(id, { title: newTitle });
-      loadConversations();
+      setConversations((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, title: newTitle, updated_at: new Date().toISOString() } : c))
+      );
+      await saveCachedConversation({ id, title: newTitle, updated_at: new Date().toISOString() });
     } catch (e) {
       console.error(e);
     }
@@ -187,12 +276,27 @@ export default function App() {
   const handleDeleteConversation = async (id) => {
     try {
       await apiConversations.delete(id);
+      await deleteCachedConversation(id);
+      setConversations((prev) => prev.filter((c) => c.id !== id));
       if (currentId === id) {
         handleNewChat();
       }
-      loadConversations();
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const handleDeleteAllConversations = async () => {
+    if (!window.confirm('Are you sure you want to delete ALL conversations? This cannot be undone.')) {
+      return;
+    }
+    try {
+      await apiConversations.deleteAll();
+      await clearAllCache();
+      setConversations([]);
+      handleNewChat();
+    } catch (e) {
+      console.error('Failed to delete all conversations:', e);
     }
   };
 
@@ -202,9 +306,114 @@ export default function App() {
       try {
         await apiConversations.clear(currentId);
         setMessages([]);
+        await deleteCachedConversation(currentId);
       } catch (e) {
         console.error(e);
       }
+    }
+  };
+
+  const handleDeleteMessage = async (msgId) => {
+    // Optimistic UI removal
+    setMessages((prev) => prev.filter((m) => m.id !== msgId));
+    await deleteCachedMessage(msgId);
+    if (currentId) {
+      try {
+        await apiConversations.deleteMessage(currentId, msgId);
+      } catch (e) {
+        console.error('Failed to delete message on server:', e);
+      }
+    }
+  };
+
+  // Export / Import
+  const handleExportAll = async () => {
+    try {
+      const data = await apiConversations.exportAll();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `mukku_conversations_export_${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert('Failed to export conversations: ' + e.message);
+    }
+  };
+
+  const handleExportConversation = async (id) => {
+    try {
+      const data = await apiConversations.exportOne(id);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `conversation_${id}_${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert('Failed to export conversation: ' + e.message);
+    }
+  };
+
+  const handleImportConversations = async (jsonData) => {
+    try {
+      let list = [];
+      if (Array.isArray(jsonData)) {
+        list = jsonData;
+      } else if (jsonData && Array.isArray(jsonData.conversations)) {
+        list = jsonData.conversations;
+      } else {
+        throw new Error('Unrecognized JSON import format');
+      }
+
+      const res = await apiConversations.importConversations(list);
+      alert(`Import complete! Imported ${res.imported_conversations} conversations (${res.imported_messages} messages).`);
+      await loadConversations(false);
+      if (res.conversation_ids && res.conversation_ids.length > 0) {
+        selectConversation(res.conversation_ids[0]);
+      }
+    } catch (e) {
+      alert('Import failed: ' + e.message);
+    }
+  };
+
+  // Search across conversations and message text
+  const handleSearchChange = async (query) => {
+    if (!query.trim()) {
+      const list = await apiConversations.list();
+      setConversations(list);
+      return;
+    }
+    try {
+      const results = await apiConversations.search(query);
+      setConversations(results);
+    } catch {
+      // fallback to client filter
+    }
+  };
+
+  // Offline queue processor
+  const syncOfflineQueue = async () => {
+    try {
+      const queue = await getOfflineQueue();
+      if (!queue || !queue.length) return;
+      for (const item of queue) {
+        try {
+          await apiConversations.createMessage(item.conversation_id, {
+            role: item.role,
+            content: item.content,
+            message_id: item.id,
+          });
+          await removeOfflineQueueItem(item.id);
+        } catch {
+          // Keep in queue if still failing
+          break;
+        }
+      }
+    } catch (e) {
+      console.warn('Offline sync error:', e);
     }
   };
 
@@ -213,14 +422,19 @@ export default function App() {
     const textToSend = overridePrompt || input;
     if (!textToSend.trim() && !selectedFile && !imageBase64) return;
 
-    // Build temporary user message
+    // Generate client-side UUID for idempotency & instant persistence
+    const userMsgId = 'msg-' + (window.crypto?.randomUUID ? window.crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).substr(2, 6));
+
     const userMsg = {
-      id: `temp-${Date.now()}`,
+      id: userMsgId,
+      conversation_id: currentId,
       role: 'user',
       content: textToSend,
+      status: 'completed',
       created_at: new Date().toISOString(),
     };
 
+    // 1. Instantly display in UI
     setMessages((prev) => [...prev, userMsg]);
     setInput('');
     setStreaming(true);
@@ -228,16 +442,31 @@ export default function App() {
     setActiveTool(null);
     setActiveCitations(null);
 
+    // 2. Instantly persist to client IndexedDB cache
+    await saveCachedMessage(userMsg);
+
+    // If offline, queue it
+    if (!navigator.onLine && currentId) {
+      await enqueueOfflineMessage({
+        id: userMsgId,
+        conversation_id: currentId,
+        role: 'user',
+        content: textToSend,
+      });
+    }
+
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
     let fullTokens = '';
     let toolInfo = null;
     let citationsInfo = null;
+    let activeConvId = currentId;
 
     const payload = {
       conversation_id: currentId,
       content: textToSend,
+      message_id: userMsgId,
       model: settings?.ollama_model || 'qwen2.5:3b',
       temperature: settings?.temperature ?? 0.7,
       system_prompt: settings?.system_prompt,
@@ -247,7 +476,7 @@ export default function App() {
       image_base64: imageBase64,
     };
 
-    // If file was attached, upload it first if doc
+    // If document file attached, upload first
     if (selectedFile?.type === 'doc') {
       try {
         setActiveTool({ tool: 'document', status: 'Uploading & indexing document...' });
@@ -282,38 +511,57 @@ export default function App() {
         citationsInfo = c;
       },
       onConversationCreated: (newConvId) => {
+        activeConvId = newConvId;
         setCurrentId(newConvId);
+        localStorage.setItem('mukku_last_conv_id', newConvId);
       },
       onTitleUpdated: (newTitle) => {
-        loadConversations();
+        setConversations((prev) =>
+          prev.map((c) => (c.id === activeConvId ? { ...c, title: newTitle } : c))
+        );
+        apiConversations.list().then((fresh) => {
+          setConversations(fresh);
+          cacheConversations(fresh);
+        });
       },
-      onDone: (messageId) => {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: messageId,
-            role: 'assistant',
-            content: fullTokens,
-            tool_calls: toolInfo ? JSON.stringify(toolInfo) : null,
-            citations: citationsInfo ? JSON.stringify(citationsInfo) : null,
-            created_at: new Date().toISOString(),
-          },
-        ]);
+      onDone: async (assistantMsgId, finalStatus) => {
+        const assistantMsg = {
+          id: assistantMsgId,
+          conversation_id: activeConvId,
+          role: 'assistant',
+          content: fullTokens,
+          status: finalStatus || 'completed',
+          tool_calls: toolInfo ? JSON.stringify(toolInfo) : null,
+          citations: citationsInfo ? JSON.stringify(citationsInfo) : null,
+          created_at: new Date().toISOString(),
+        };
+
+        setMessages((prev) => [...prev, assistantMsg]);
+        await saveCachedMessage(assistantMsg);
+
         setStreaming(false);
         setStreamContent('');
         setActiveTool(null);
-        loadConversations();
+
+        // Background sync conversation list
+        apiConversations.list().then((fresh) => {
+          setConversations(fresh);
+          cacheConversations(fresh);
+        });
       },
-      onError: (err) => {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `err-${Date.now()}`,
-            role: 'assistant',
-            content: `⚠️ Error: ${err.message}`,
-            created_at: new Date().toISOString(),
-          },
-        ]);
+      onError: async (err) => {
+        const errorMsg = {
+          id: `err-${Date.now()}`,
+          conversation_id: activeConvId,
+          role: 'assistant',
+          content: fullTokens ? fullTokens : `⚠️ Error: ${err.message}`,
+          status: 'error',
+          created_at: new Date().toISOString(),
+        };
+
+        setMessages((prev) => [...prev, errorMsg]);
+        await saveCachedMessage(errorMsg);
+
         setStreaming(false);
         setStreamContent('');
         setActiveTool(null);
@@ -321,50 +569,76 @@ export default function App() {
     });
   };
 
-  const handleStop = () => {
+  const handleStop = async () => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       setStreaming(false);
       if (streamContent) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `aborted-${Date.now()}`,
-            role: 'assistant',
-            content: streamContent + '\n\n*(Generation stopped by user)*',
-            created_at: new Date().toISOString(),
-          },
-        ]);
+        const cancelledMsg = {
+          id: `aborted-${Date.now()}`,
+          conversation_id: currentId,
+          role: 'assistant',
+          content: streamContent,
+          status: 'cancelled',
+          created_at: new Date().toISOString(),
+        };
+        setMessages((prev) => [...prev, cancelledMsg]);
+        await saveCachedMessage(cancelledMsg);
       }
       setStreamContent('');
       setActiveTool(null);
     }
   };
 
-  const handleRegenerate = async () => {
+  const handleRegenerate = async (targetMsgId) => {
     if (streaming || !currentId) return;
 
-    // Remove last assistant message
-    const lastUser = [...messages].reverse().find((m) => m.role === 'user');
-    if (!lastUser) return;
+    let targetIndex = -1;
+    if (targetMsgId) {
+      targetIndex = messages.findIndex((m) => m.id === targetMsgId);
+    } else {
+      // Default to last assistant message
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role === 'assistant') {
+          targetIndex = i;
+          break;
+        }
+      }
+    }
 
-    setMessages((prev) => prev.slice(0, -1));
-    handleSend(lastUser.content);
+    if (targetIndex === -1) return;
+
+    // Find the preceding user message
+    let userMsg = null;
+    for (let i = targetIndex - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') {
+        userMsg = messages[i];
+        break;
+      }
+    }
+
+    if (!userMsg) return;
+
+    // Remove the target assistant message from UI and server/cache
+    const removedMsg = messages[targetIndex];
+    setMessages((prev) => prev.filter((_, idx) => idx !== targetIndex));
+    if (removedMsg?.id && !removedMsg.id.startsWith('temp-')) {
+      deleteCachedMessage(removedMsg.id);
+      apiConversations.deleteMessage(currentId, removedMsg.id).catch(() => {});
+    }
+
+    // Trigger re-generation with the user message content
+    handleSend(userMsg.content);
   };
 
   const handleEditMessage = async (msgId, newContent) => {
     if (streaming) return;
-    // Find message index
     const idx = messages.findIndex((m) => m.id === msgId);
     if (idx === -1) return;
 
     // Trim messages after this one
     setMessages(messages.slice(0, idx));
     handleSend(newContent);
-  };
-
-  const handleDeleteMessage = (msgId) => {
-    setMessages((prev) => prev.filter((m) => m.id !== msgId));
   };
 
   const handleSaveSettings = async (newSettings) => {
@@ -374,6 +648,16 @@ export default function App() {
     } catch (e) {
       console.error(e);
     }
+  };
+
+  const handleAuthSuccess = async (user) => {
+    setCurrentUser(user);
+    setCurrentId(null);
+    localStorage.removeItem('mukku_last_conv_id');
+    setMessages([]);
+    setInput('');
+    await clearAllCache();
+    await loadConversations(false);
   };
 
   return (
@@ -394,6 +678,11 @@ export default function App() {
         onNewChat={handleNewChat}
         onDeleteConversation={handleDeleteConversation}
         onRenameConversation={handleRename}
+        onDeleteAllConversations={handleDeleteAllConversations}
+        onExportAll={handleExportAll}
+        onExportConversation={handleExportConversation}
+        onImportConversations={handleImportConversations}
+        onSearchChange={handleSearchChange}
         ollamaStatus={ollamaStatus}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenMemory={() => setIsMemoryOpen(true)}
@@ -439,7 +728,29 @@ export default function App() {
         </header>
 
         {/* Messages list / Welcome Screen */}
-        <div className="messages-container">
+        <div className="messages-container" ref={messagesContainerRef}>
+          {hasMoreMessages && (
+            <div className="load-more-container">
+              <button
+                className="load-more-btn"
+                onClick={handleLoadEarlierMessages}
+                disabled={isLoadingMore}
+              >
+                {isLoadingMore ? (
+                  <>
+                    <Loader2 size={13} className="spin-animate" />
+                    <span>Loading earlier messages...</span>
+                  </>
+                ) : (
+                  <>
+                    <ArrowUp size={13} />
+                    <span>Load earlier messages</span>
+                  </>
+                )}
+              </button>
+            </div>
+          )}
+
           {messages.length === 0 && !streaming ? (
             <WelcomeScreen onSelectPrompt={(prompt) => handleSend(prompt)} />
           ) : (
@@ -466,6 +777,7 @@ export default function App() {
                     role: 'assistant',
                     content: streamContent,
                     citations: activeCitations,
+                    status: 'streaming',
                   }}
                   streaming={true}
                 />

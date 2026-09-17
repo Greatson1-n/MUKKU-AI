@@ -29,23 +29,40 @@ class TokenResponse(BaseModel):
 class MessageBase(BaseModel):
     role: str
     content: str
+    status: Optional[str] = "completed"
+    model: Optional[str] = None
     tool_calls: Optional[str] = None
     citations: Optional[str] = None
 
-class MessageCreate(MessageBase):
-    pass
+class MessageCreate(BaseModel):
+    id: Optional[str] = None
+    role: str = "user"
+    content: str
+    status: Optional[str] = "completed"
+    model: Optional[str] = None
+    created_at: Optional[datetime] = None
 
 class MessageResponse(MessageBase):
     id: str
     conversation_id: str
-    token_count: int
+    status: str = "completed"
+    model: Optional[str] = None
+    token_count: int = 0
     created_at: datetime
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
 
+class MessageListResponse(BaseModel):
+    messages: List[MessageResponse]
+    has_more: bool = False
+    total_count: int = 0
+    next_cursor: Optional[str] = None
+
 # Conversations
 class ConversationCreate(BaseModel):
+    id: Optional[str] = None
     title: Optional[str] = "New Chat"
     model_name: Optional[str] = None
     system_prompt: Optional[str] = None
@@ -53,6 +70,7 @@ class ConversationCreate(BaseModel):
 class ConversationUpdate(BaseModel):
     title: Optional[str] = None
     system_prompt: Optional[str] = None
+    model_name: Optional[str] = None
 
 class ConversationResponse(BaseModel):
     id: str
@@ -71,9 +89,19 @@ class ConversationResponse(BaseModel):
 class ConversationDetailResponse(ConversationResponse):
     messages: List[MessageResponse] = []
 
+class ConversationExport(BaseModel):
+    conversation_id: str
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    model_name: str
+    system_prompt: Optional[str] = None
+    messages: List[Dict[str, Any]]
+
 # Chat Streaming Request
 class ChatRequest(BaseModel):
     conversation_id: Optional[str] = None
+    message_id: Optional[str] = None  # Client-generated UUID for user message idempotency
     content: str = Field(..., min_length=1)
     model: Optional[str] = None
     temperature: Optional[float] = 0.7

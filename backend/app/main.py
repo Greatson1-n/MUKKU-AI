@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core.config import settings
-from app.core.database import Base, engine
+from app.core.database import Base, engine, run_db_migrations
 from app.api import auth, chat, conversations, documents, memory, ollama, settings as app_settings
 
 logging.basicConfig(
@@ -16,9 +16,10 @@ logger = logging.getLogger("mukku.ai")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize DB tables
-    logger.info("Initializing database schema...")
+    # Initialize DB tables & migrations
+    logger.info("Initializing database schema and running migrations...")
     Base.metadata.create_all(bind=engine)
+    run_db_migrations()
     logger.info(f"{settings.APP_NAME} v{settings.APP_VERSION} startup complete.")
     yield
     logger.info("Shutting down application...")
@@ -66,6 +67,7 @@ def health_check():
 app.include_router(auth.router)
 app.include_router(chat.router)
 app.include_router(conversations.router)
+app.include_router(conversations.messages_router)
 app.include_router(documents.router)
 app.include_router(memory.router)
 app.include_router(ollama.router)

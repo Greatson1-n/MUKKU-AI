@@ -12,9 +12,20 @@ export function setAuthToken(token) {
   }
 }
 
+export function getGuestId() {
+  let guestId = localStorage.getItem('mukku_guest_id');
+  if (!guestId) {
+    guestId = 'guest_' + Math.random().toString(36).substring(2, 11) + '_' + Date.now().toString(36);
+    localStorage.setItem('mukku_guest_id', guestId);
+  }
+  return guestId;
+}
+
 async function request(endpoint, options = {}) {
   const token = getAuthToken();
+  const guestId = getGuestId();
   const headers = {
+    'X-Guest-Id': guestId,
     ...(options.headers || {}),
   };
   if (token) {
@@ -45,10 +56,31 @@ async function request(endpoint, options = {}) {
 
 // Auth API
 export const apiAuth = {
-  getGuestToken: () => request('/auth/guest-token'),
-  login: (data) => request('/auth/login', { method: 'POST', body: JSON.stringify(data) }),
-  register: (data) => request('/auth/register', { method: 'POST', body: JSON.stringify(data) }),
+  getGuestToken: async () => {
+    const res = await request('/auth/guest-token');
+    if (res.access_token) {
+      setAuthToken(res.access_token);
+    }
+    return res;
+  },
+  login: async (data) => {
+    const res = await request('/auth/login', { method: 'POST', body: JSON.stringify(data) });
+    if (res.access_token) {
+      setAuthToken(res.access_token);
+    }
+    return res;
+  },
+  register: async (data) => {
+    const res = await request('/auth/register', { method: 'POST', body: JSON.stringify(data) });
+    if (res.access_token) {
+      setAuthToken(res.access_token);
+    }
+    return res;
+  },
   getMe: () => request('/auth/me'),
+  logout: () => {
+    setAuthToken(null);
+  },
 };
 
 // Ollama API
@@ -60,11 +92,29 @@ export const apiOllama = {
 // Conversations API
 export const apiConversations = {
   list: (search = '') => request(`/conversations${search ? `?search=${encodeURIComponent(search)}` : ''}`),
+  search: (query) => request(`/conversations/search?q=${encodeURIComponent(query)}`),
   get: (id) => request(`/conversations/${id}`),
   create: (data) => request('/conversations', { method: 'POST', body: JSON.stringify(data) }),
   update: (id, data) => request(`/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   delete: (id) => request(`/conversations/${id}`, { method: 'DELETE' }),
+  deleteAll: () => request('/conversations', { method: 'DELETE' }),
   clear: (id) => request(`/conversations/${id}/clear`, { method: 'POST' }),
+
+  // Messages API
+  getMessages: (id, { limit = 50, before = null } = {}) => {
+    let url = `/conversations/${id}/messages?limit=${limit}`;
+    if (before) {
+      url += `&before=${encodeURIComponent(before)}`;
+    }
+    return request(url);
+  },
+  createMessage: (convId, data) => request(`/conversations/${convId}/messages`, { method: 'POST', body: JSON.stringify(data) }),
+  deleteMessage: (convId, msgId) => request(`/conversations/${convId}/messages/${msgId}`, { method: 'DELETE' }),
+
+  // Import / Export
+  exportOne: (id) => request(`/conversations/${id}/export`),
+  exportAll: () => request('/conversations/export'),
+  importConversations: (conversationsList) => request('/conversations/import', { method: 'POST', body: JSON.stringify({ conversations: conversationsList }) }),
 };
 
 // Memory API
@@ -112,8 +162,10 @@ export async function streamChatResponse({
   signal,
 }) {
   const token = getAuthToken();
+  const guestId = getGuestId();
   const headers = {
     'Content-Type': 'application/json',
+    'X-Guest-Id': guestId,
   };
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
@@ -174,7 +226,7 @@ export async function streamChatResponse({
               if (onTitleUpdated) onTitleUpdated(data.title);
               break;
             case 'done':
-              if (onDone) onDone(data.message_id);
+              if (onDone) onDone(data.message_id, data.status);
               break;
             case 'error':
               if (onError) onError(new Error(data.message));

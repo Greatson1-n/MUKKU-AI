@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Bot, User, Copy, Check, RotateCw, Volume2, VolumeX, Edit3, Trash2, Cpu } from 'lucide-react';
+import { Bot, User, Copy, Check, RotateCw, Volume2, VolumeX, Edit3, Trash2, Cpu, AlertTriangle, AlertCircle, CloudOff } from 'lucide-react';
 import MarkdownRenderer from './MarkdownRenderer';
 import Citations from './Citations';
 
@@ -15,13 +15,16 @@ export default function MessageItem({
 }) {
   const [copied, setCopied] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
-  const [editContent, setEditContent] = useState(message.content);
+  const [editContent, setEditContent] = useState(message.content || '');
 
   const isUser = message.role === 'user';
+  const isInterrupted = !isUser && (message.status === 'cancelled' || message.status === 'interrupted' || (message.status === 'streaming' && !streaming));
+  const isError = !isUser && message.status === 'error';
+  const isOffline = message.sync_status === 'pending_sync';
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(message.content);
+      await navigator.clipboard.writeText(message.content || '');
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (e) {
@@ -57,6 +60,14 @@ export default function MessageItem({
       </div>
 
       <div className="message-body">
+        {/* Offline Queued Status */}
+        {isOffline && (
+          <div className="status-pill syncing">
+            <CloudOff size={11} />
+            <span>Saved offline (queued for sync)</span>
+          </div>
+        )}
+
         {/* Tool Execution Card (if tool was run for this response) */}
         {!isUser && toolMetadata && (
           <div className="tool-pill-card">
@@ -88,20 +99,50 @@ export default function MessageItem({
             <div style={{ whiteSpace: 'pre-wrap' }}>{message.content}</div>
           ) : (
             <>
-              <MarkdownRenderer content={message.content} />
+              {message.content ? (
+                <MarkdownRenderer content={message.content} />
+              ) : (
+                <span style={{ color: 'var(--text-dim)', fontStyle: 'italic' }}>No response content</span>
+              )}
               {citations && <Citations citations={citations} />}
             </>
+          )}
+
+          {/* Interrupted Crash Alert Box */}
+          {isInterrupted && (
+            <div className="interrupted-alert-box">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <AlertTriangle size={14} />
+                <span>Generation was interrupted.</span>
+              </div>
+              {onRegenerate && (
+                <button onClick={() => onRegenerate(message.id)}>
+                  <RotateCw size={11} />
+                  <span>Regenerate</span>
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Error Alert Box */}
+          {isError && (
+            <div className="status-pill error" style={{ marginTop: '8px', display: 'flex' }}>
+              <AlertCircle size={12} />
+              <span>Response encountered an error</span>
+            </div>
           )}
         </div>
 
         {/* Action Buttons */}
         <div className="message-actions">
-          <button className="msg-action-btn" onClick={handleCopy} title="Copy text">
-            {copied ? <Check size={13} style={{ color: '#10b981' }} /> : <Copy size={13} />}
-            <span>{copied ? 'Copied' : 'Copy'}</span>
-          </button>
+          {message.content && (
+            <button className="msg-action-btn" onClick={handleCopy} title="Copy text">
+              {copied ? <Check size={13} style={{ color: '#10b981' }} /> : <Copy size={13} />}
+              <span>{copied ? 'Copied' : 'Copy'}</span>
+            </button>
+          )}
 
-          {!isUser && onSpeak && (
+          {!isUser && onSpeak && message.content && (
             <button
               className="msg-action-btn"
               onClick={() => onSpeak(message.content)}
@@ -112,7 +153,7 @@ export default function MessageItem({
             </button>
           )}
 
-          {!isUser && isLastAssistant && !streaming && onRegenerate && (
+          {!isUser && (isLastAssistant || isInterrupted) && !streaming && onRegenerate && (
             <button className="msg-action-btn" onClick={() => onRegenerate(message.id)} title="Regenerate response">
               <RotateCw size={13} />
               <span>Regenerate</span>

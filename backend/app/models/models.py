@@ -41,6 +41,10 @@ class Conversation(Base):
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
+    __table_args__ = (
+        Index("idx_conversations_user_updated", "user_id", "updated_at"),
+    )
+
     user = relationship("User", back_populates="conversations")
     messages = relationship("Message", back_populates="conversation", cascade="all, delete-orphan", order_by="Message.created_at")
 
@@ -51,10 +55,17 @@ class Message(Base):
     conversation_id = Column(String(36), ForeignKey("conversations.id"), index=True, nullable=False)
     role = Column(String(20), nullable=False)  # "user", "assistant", "system", "tool"
     content = Column(Text, nullable=False, default="")
+    status = Column(String(20), default="completed", index=True, nullable=False)  # "pending", "streaming", "completed", "error", "cancelled"
+    model = Column(String(100), nullable=True)
     tool_calls = Column(Text, nullable=True)  # JSON text of tool execution details
     citations = Column(Text, nullable=True)   # JSON text of sources
     token_count = Column(Integer, default=0)
     created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+    __table_args__ = (
+        Index("idx_messages_conv_created", "conversation_id", "created_at"),
+    )
 
     conversation = relationship("Conversation", back_populates="messages")
 

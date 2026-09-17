@@ -1,7 +1,9 @@
 import json
 import uuid
+import time
 import logging
 from typing import AsyncGenerator
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -21,13 +23,40 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
 
+def utcnow():
+    return datetime.now(timezone.utc)
+
+def generate_local_title(content: str) -> str:
+    """Fast, deterministic zero-latency title generation from user prompt."""
+    clean = content.strip().replace("\n", " ")
+    prefixes = [
+        "can you explain", "explain to me", "please explain", "explain how", "explain",
+        "how does", "how do", "how can i", "how to", "what is the", "what is", "what are",
+        "write a python", "write a code", "write a", "can you write", "help me write",
+        "tell me about", "give me an overview of", "summarize", "help me with"
+    ]
+    lower = clean.lower()
+    for p in prefixes:
+        if lower.startswith(p):
+            clean = clean[len(p):].strip(" ?:.,!-")
+            break
+    clean = clean.strip(" ?:.,!-\"'")
+    words = clean.split()
+    if not words:
+        return "New Chat"
+    title = " ".join(words[:6]).title()
+    return title[:45].strip() or "New Chat"
+
 async def sse_chat_generator(
     user_id: str,
     req: ChatRequest,
     existing_user_message: Message = None
 ) -> AsyncGenerator[str, None]:
-    """Generates Server-Sent Events (SSE) stream for chat interactions."""
+    """Generates Server-Sent Events (SSE) stream for chat interactions with persistent crash-recovery."""
     db: Session = SessionLocal()
+    assistant_msg = None
+    full_response_chunks = []
+    
     try:
         # 1. Get or create conversation
         conv = None
@@ -41,12 +70,15 @@ async def sse_chat_generator(
         if not conv:
             is_new_conv = True
             default_model = settings.GROQ_MODEL if settings.LLM_PROVIDER.lower() == "groq" else settings.OLLAMA_MODEL
+            conv_id = req.conversation_id if req.conversation_id else str(uuid.uuid4())
             conv = Conversation(
-                id=str(uuid.uuid4()),
+                id=conv_id,
                 user_id=user_id,
                 title="New Chat",
                 model_name=req.model or default_model,
-                system_prompt=req.system_prompt
+                system_prompt=req.system_prompt,
+                created_at=utcnow(),
+                updated_at=utcnow()
             )
             db.add(conv)
             db.commit()
@@ -54,18 +86,31 @@ async def sse_chat_generator(
 
         yield f"data: {json.dumps({'event': 'conversation', 'conversation_id': conv.id})}\n\n"
 
-        # 2. Save user message if not already existing (from edit/regenerate)
+        # 2. Save user message immediately if not already existing
         user_msg = existing_user_message
         if not user_msg:
-            user_msg = Message(
-                conversation_id=conv.id,
-                role="user",
-                content=req.content,
-                token_count=estimate_tokens(req.content)
-            )
-            db.add(user_msg)
-            db.commit()
-            db.refresh(user_msg)
+            if req.message_id:
+                user_msg = db.query(Message).filter(
+                    Message.id == req.message_id,
+                    Message.conversation_id == conv.id
+                ).first()
+            if not user_msg:
+                user_msg = Message(
+                    id=req.message_id or str(uuid.uuid4()),
+                    conversation_id=conv.id,
+                    role="user",
+                    content=req.content,
+                    status="completed",
+                    token_count=estimate_tokens(req.content),
+                    created_at=utcnow(),
+                    updated_at=utcnow()
+                )
+                db.add(user_msg)
+                conv.updated_at = utcnow()
+                db.commit()
+                db.refresh(user_msg)
+
+        yield f"data: {json.dumps({'event': 'user_message_saved', 'message_id': user_msg.id})}\n\n"
 
         effective_content = req.content
 
@@ -92,7 +137,6 @@ async def sse_chat_generator(
             tool_name = tool_decision["tool"]
             tool_args = tool_decision.get("args", {})
 
-            # Notify frontend that tool has started
             initial_status = f"Executing {tool_name}..."
             yield f"data: {json.dumps({'event': 'tool_start', 'tool': tool_name, 'status': initial_status})}\n\n"
 
@@ -103,7 +147,6 @@ async def sse_chat_generator(
             tool_citations = citations
             tool_metadata = {"tool": tool_name, "args": tool_args, "status": status_label}
 
-            # Update status / finish tool
             yield f"data: {json.dumps({'event': 'tool_end', 'tool': tool_name, 'status': status_label})}\n\n"
 
             if citations:
@@ -122,7 +165,32 @@ async def sse_chat_generator(
             recent_window_size=settings.RECENT_MESSAGES_COUNT
         )
 
-        # 6. Stream tokens from Ollama
+        # 6. Initialize assistant message in DB upfront with status='streaming'
+        default_model = settings.GROQ_MODEL if settings.LLM_PROVIDER.lower() == "groq" else settings.OLLAMA_MODEL
+        target_model = req.model or conv.model_name or default_model
+
+        assistant_msg = Message(
+            id=str(uuid.uuid4()),
+            conversation_id=conv.id,
+            role="assistant",
+            content="",
+            status="streaming",
+            model=target_model,
+            tool_calls=json.dumps(tool_metadata) if tool_metadata else None,
+            citations=json.dumps(tool_citations) if tool_citations else None,
+            token_count=0,
+            created_at=utcnow(),
+            updated_at=utcnow()
+        )
+        db.add(assistant_msg)
+        conv.model_name = target_model
+        conv.updated_at = utcnow()
+        db.commit()
+        db.refresh(assistant_msg)
+
+        yield f"data: {json.dumps({'event': 'assistant_started', 'message_id': assistant_msg.id})}\n\n"
+
+        # 7. Stream tokens from Ollama with periodic DB check-pointing
         model_options = {
             "temperature": req.temperature if req.temperature is not None else 0.7,
             "top_p": req.top_p if req.top_p is not None else 0.9,
@@ -131,53 +199,51 @@ async def sse_chat_generator(
             "num_predict": req.max_tokens if req.max_tokens is not None else 1500
         }
 
-        full_response_chunks = []
-        default_model = settings.GROQ_MODEL if settings.LLM_PROVIDER.lower() == "groq" else settings.OLLAMA_MODEL
-        target_model = req.model or conv.model_name or default_model
+        last_flush_time = time.time()
+        tokens_since_flush = 0
+
         async for token in ollama_service.chat_stream(
             messages=messages,
             model=target_model,
             options=model_options
         ):
             full_response_chunks.append(token)
+            tokens_since_flush += 1
             yield f"data: {json.dumps({'event': 'token', 'content': token})}\n\n"
+
+            now = time.time()
+            if now - last_flush_time >= 2.0 or tokens_since_flush >= 30:
+                try:
+                    assistant_msg.content = "".join(full_response_chunks)
+                    assistant_msg.updated_at = utcnow()
+                    db.commit()
+                    last_flush_time = now
+                    tokens_since_flush = 0
+                except Exception as fe:
+                    logger.debug(f"Checkpoint flush notice: {fe}")
 
         full_assistant_content = "".join(full_response_chunks).strip()
 
-        # 7. Persist assistant message in DB
-        assistant_msg = Message(
-            conversation_id=conv.id,
-            role="assistant",
-            content=full_assistant_content,
-            tool_calls=json.dumps(tool_metadata) if tool_metadata else None,
-            citations=json.dumps(tool_citations) if tool_citations else None,
-            token_count=estimate_tokens(full_assistant_content)
-        )
-        db.add(assistant_msg)
-        conv.model_name = req.model or conv.model_name or settings.OLLAMA_MODEL
+        # 8. Mark assistant message as completed
+        assistant_msg.content = full_assistant_content
+        assistant_msg.status = "completed"
+        assistant_msg.tool_calls = json.dumps(tool_metadata) if tool_metadata else None
+        assistant_msg.citations = json.dumps(tool_citations) if tool_citations else None
+        assistant_msg.token_count = estimate_tokens(full_assistant_content)
+        assistant_msg.updated_at = utcnow()
+        conv.updated_at = utcnow()
         db.commit()
-        db.refresh(assistant_msg)
 
-        # 8. Title generation for new chats
+        # 9. Smart Title generation for new chats
         if is_new_conv or conv.title == "New Chat":
-            title_prompt = (
-                f"Generate a very short 3 to 5 word title summarizing this message: \"{req.content[:150]}\". "
-                "Do not use quotes, punctuation, or 'Title:' prefix."
-            )
-            try:
-                new_title = await ollama_service.generate(
-                    prompt=title_prompt,
-                    options={"temperature": 0.4, "num_predict": 15}
-                )
-                clean_title = new_title.strip().strip('"').strip("'")
-                if clean_title and len(clean_title) <= 60:
-                    conv.title = clean_title
-                    db.commit()
-                    yield f"data: {json.dumps({'event': 'title_updated', 'title': clean_title})}\n\n"
-            except Exception as e:
-                logger.debug(f"Title generation error: {e}")
+            clean_title = generate_local_title(req.content)
+            if clean_title and clean_title != conv.title:
+                conv.title = clean_title
+                conv.updated_at = utcnow()
+                db.commit()
+                yield f"data: {json.dumps({'event': 'title_updated', 'title': clean_title})}\n\n"
 
-        # 9. Trigger background memory extraction if enabled
+        # 10. Memory auto-extraction
         if req.memory_enabled:
             try:
                 await memory_service.auto_extract_memory(db, user_id, req.content)
@@ -185,13 +251,35 @@ async def sse_chat_generator(
                 logger.debug(f"Memory extraction skipped: {e}")
 
         # Final done event
-        yield f"data: {json.dumps({'event': 'done', 'message_id': assistant_msg.id})}\n\n"
+        yield f"data: {json.dumps({'event': 'done', 'message_id': assistant_msg.id, 'status': 'completed'})}\n\n"
 
     except Exception as e:
         logger.error(f"SSE Chat generator error: {e}", exc_info=True)
+        if assistant_msg:
+            try:
+                assistant_msg.status = "error"
+                if full_response_chunks:
+                    assistant_msg.content = "".join(full_response_chunks).strip()
+                assistant_msg.updated_at = utcnow()
+                db.commit()
+            except Exception:
+                pass
         yield f"data: {json.dumps({'event': 'error', 'message': f'Server error: {str(e)}'})}\n\n"
     finally:
-        db.close()
+        try:
+            if assistant_msg:
+                # If stream disconnected or was aborted while streaming, mark cancelled
+                refreshed_msg = db.query(Message).filter(Message.id == assistant_msg.id).first()
+                if refreshed_msg and refreshed_msg.status == "streaming":
+                    refreshed_msg.status = "cancelled"
+                    if full_response_chunks:
+                        refreshed_msg.content = "".join(full_response_chunks).strip()
+                    refreshed_msg.updated_at = utcnow()
+                    db.commit()
+        except Exception as clex:
+            logger.debug(f"Stream exit cleanup notice: {clex}")
+        finally:
+            db.close()
 
 @router.post("/stream")
 async def chat_stream(
@@ -238,7 +326,6 @@ async def regenerate(
         for i, m in enumerate(messages):
             if m.id == req.message_id and m.role == "user":
                 target_user_msg = m
-                # Delete following messages
                 for sub in messages[i+1:]:
                     db.delete(sub)
                 db.commit()
@@ -285,11 +372,10 @@ async def edit_message(
     if not conv:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Unauthorized")
 
-    # Update content
     msg.content = req.content
     msg.token_count = estimate_tokens(req.content)
+    msg.updated_at = utcnow()
 
-    # Delete all messages after this one
     all_msgs = (
         db.query(Message)
         .filter(Message.conversation_id == conv.id)

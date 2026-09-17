@@ -10,7 +10,33 @@ from app.schemas.schemas import UserRegister, UserLogin, UserResponse, TokenResp
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
-def get_or_create_guest_user(db: Session) -> User:
+def get_or_create_guest_user(db: Session, guest_id: Optional[str] = None) -> User:
+    if guest_id:
+        guest = db.query(User).filter(User.id == guest_id).first()
+        if guest:
+            return guest
+        uname = f"guest_{guest_id}"
+        if len(uname) > 50:
+            uname = f"guest_{guest_id[-16:]}"
+        if db.query(User).filter(User.username == uname).first():
+            uname = f"guest_{uuid.uuid4().hex[:12]}"
+        guest = User(
+            id=guest_id,
+            username=uname,
+            is_guest=True
+        )
+        db.add(guest)
+        try:
+            db.commit()
+            db.refresh(guest)
+            return guest
+        except Exception:
+            db.rollback()
+            guest = db.query(User).filter(User.id == guest_id).first()
+            if guest:
+                return guest
+            raise
+
     guest = db.query(User).filter(User.username == "guest_user").first()
     if not guest:
         guest = User(
@@ -25,6 +51,7 @@ def get_or_create_guest_user(db: Session) -> User:
 
 def get_current_user(
     authorization: Optional[str] = Header(None),
+    x_guest_id: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ) -> User:
     """Returns authenticated user, or falls back to local guest user."""
@@ -35,7 +62,7 @@ def get_current_user(
             user = db.query(User).filter(User.id == payload["sub"]).first()
             if user:
                 return user
-    return get_or_create_guest_user(db)
+    return get_or_create_guest_user(db, guest_id=x_guest_id)
 
 @router.post("/register", response_model=TokenResponse)
 def register(req: UserRegister, db: Session = Depends(get_db)):
@@ -73,7 +100,10 @@ def get_me(user: User = Depends(get_current_user)):
     return UserResponse.model_validate(user)
 
 @router.get("/guest-token", response_model=TokenResponse)
-def get_guest_token(db: Session = Depends(get_db)):
-    guest = get_or_create_guest_user(db)
+def get_guest_token(
+    x_guest_id: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
+    guest = get_or_create_guest_user(db, guest_id=x_guest_id)
     token = create_access_token({"sub": guest.id, "username": guest.username})
     return TokenResponse(access_token=token, user=UserResponse.model_validate(guest))
