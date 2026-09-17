@@ -1,0 +1,9 @@
+{
+	"appId": "com.mukku.ai",
+	"appName": "MUKKU AI",
+	"webDir": "dist",
+	"server": {
+		"androidScheme": "https",
+		"cleartext": true
+	}
+}

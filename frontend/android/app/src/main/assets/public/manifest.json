@@ -1,0 +1,18 @@
+{
+  "short_name": "MUKKU.AI",
+  "name": "MUKKU AI Assistant",
+  "description": "Intelligent AI assistant powered by Qwen 2.5",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "type": "image/svg+xml",
+      "sizes": "192x192 512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#090d16",
+  "theme_color": "#863bff",
+  "display": "standalone",
+  "orientation": "portrait"
+}
