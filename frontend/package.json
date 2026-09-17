@@ -10,6 +10,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/cli": "^8.5.2",
+    "@capacitor/core": "^8.5.2",
     "lucide-react": "^1.46.0",
     "marked": "^18.0.13",
     "prismjs": "^1.30.0",
