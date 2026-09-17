@@ -67,7 +67,7 @@ export default function MessageItem({
 
         <div className="message-bubble">
           {isEditing ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', minWidth: '300px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', minWidth: 0, boxSizing: 'border-box' }}>
               <textarea
                 value={editContent}
                 onChange={(e) => setEditContent(e.target.value)}

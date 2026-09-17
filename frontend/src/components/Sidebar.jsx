@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   MessageSquarePlus,
   Search,
@@ -27,10 +27,23 @@ export default function Sidebar({
   onOpenDocuments,
   onOpenAuth,
   currentUser,
+  isOpen,
+  onClose,
 }) {
   const [search, setSearch] = useState('');
   const [editingId, setEditingId] = useState(null);
   const [editTitle, setEditTitle] = useState('');
+
+  // Close drawer on Escape key press
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && isOpen) {
+        onClose?.();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   const filtered = conversations.filter((c) =>
     (c.title || 'New Chat').toLowerCase().includes(search.toLowerCase())
@@ -63,7 +76,7 @@ export default function Sidebar({
   };
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${isOpen ? 'open' : ''}`}>
       {/* Brand Header */}
       <div className="sidebar-header">
         <div className="brand">
@@ -73,10 +86,23 @@ export default function Sidebar({
           <span>MUKKU.AI</span>
           <span className="brand-badge">Qwen 3B</span>
         </div>
+        <button
+          className="sidebar-close-mobile-btn"
+          onClick={onClose}
+          aria-label="Close sidebar"
+        >
+          <X size={20} />
+        </button>
       </div>
 
       {/* New Chat Button */}
-      <button className="new-chat-btn" onClick={onNewChat}>
+      <button
+        className="new-chat-btn"
+        onClick={() => {
+          onNewChat();
+          onClose?.();
+        }}
+      >
         <MessageSquarePlus size={18} />
         <span>New Chat</span>
       </button>
@@ -103,7 +129,10 @@ export default function Sidebar({
             <div
               key={c.id}
               className={`conversation-item ${isActive ? 'active' : ''}`}
-              onClick={() => onSelectConversation(c.id)}
+              onClick={() => {
+                onSelectConversation(c.id);
+                onClose?.();
+              }}
             >
               {isEditing ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '4px', width: '100%' }}>
@@ -157,22 +186,46 @@ export default function Sidebar({
           </span>
         </div>
 
-        <button className="footer-nav-btn" onClick={onOpenDocuments}>
+        <button
+          className="footer-nav-btn"
+          onClick={() => {
+            onOpenDocuments();
+            onClose?.();
+          }}
+        >
           <FileText size={16} />
           <span>Document Assistant (RAG)</span>
         </button>
 
-        <button className="footer-nav-btn" onClick={onOpenMemory}>
+        <button
+          className="footer-nav-btn"
+          onClick={() => {
+            onOpenMemory();
+            onClose?.();
+          }}
+        >
           <Brain size={16} />
           <span>Long-term Memory</span>
         </button>
 
-        <button className="footer-nav-btn" onClick={onOpenSettings}>
+        <button
+          className="footer-nav-btn"
+          onClick={() => {
+            onOpenSettings();
+            onClose?.();
+          }}
+        >
           <Settings size={16} />
           <span>Settings & Model Config</span>
         </button>
 
-        <button className="footer-nav-btn" onClick={onOpenAuth}>
+        <button
+          className="footer-nav-btn"
+          onClick={() => {
+            onOpenAuth();
+            onClose?.();
+          }}
+        >
           <User size={16} />
           <span>{currentUser?.is_guest ? 'Guest Profile' : currentUser?.username || 'User Profile'}</span>
         </button>

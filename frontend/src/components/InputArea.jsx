@@ -71,6 +71,13 @@ export default function InputArea({
     }
   };
 
+  const handleFocus = () => {
+    // When virtual keyboard opens on Android/mobile, ensure input stays in view
+    setTimeout(() => {
+      textareaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 300);
+  };
+
   return (
     <div className="input-area-container">
       <div className="input-box-wrapper">
@@ -99,6 +106,7 @@ export default function InputArea({
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
+          onFocus={handleFocus}
           disabled={streaming}
         />
 

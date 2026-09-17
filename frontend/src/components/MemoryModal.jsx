@@ -76,17 +76,18 @@ export default function MemoryModal({ isOpen, onClose }) {
         </p>
 
         {/* Add Memory Form */}
-        <form onSubmit={handleAdd} style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
+        <form onSubmit={handleAdd} className="memory-add-form" style={{ display: 'flex', gap: '8px', marginBottom: '20px', flexWrap: 'wrap' }}>
           <input
             type="text"
             className="form-input"
+            style={{ flex: '1 1 180px', minWidth: 0 }}
             placeholder="e.g. 'I prefer Python for backend and React for UI'"
             value={newContent}
             onChange={(e) => setNewContent(e.target.value)}
           />
           <select
             className="form-select"
-            style={{ width: '130px' }}
+            style={{ width: 'auto', minWidth: '100px', flex: '0 0 auto' }}
             value={newCategory}
             onChange={(e) => setNewCategory(e.target.value)}
           >
@@ -94,7 +95,7 @@ export default function MemoryModal({ isOpen, onClose }) {
             <option value="project">Project</option>
             <option value="fact">Fact</option>
           </select>
-          <button type="submit" className="btn-primary" style={{ padding: '0 14px' }}>
+          <button type="submit" className="btn-primary" style={{ padding: '0 16px', minHeight: '38px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <Plus size={16} />
           </button>
         </form>
@@ -120,17 +121,18 @@ export default function MemoryModal({ isOpen, onClose }) {
                   borderRadius: 'var(--radius-sm)',
                   border: '1px solid var(--border-subtle)',
                   opacity: m.is_active ? 1 : 0.5,
+                  gap: '8px',
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}>
                   <button
                     onClick={() => handleToggle(m)}
-                    style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: m.is_active ? '#10b981' : 'var(--text-dim)' }}
+                    style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: m.is_active ? '#10b981' : 'var(--text-dim)', flexShrink: 0 }}
                     title={m.is_active ? 'Active' : 'Disabled'}
                   >
                     {m.is_active ? <CheckCircle2 size={16} /> : <Circle size={16} />}
                   </button>
-                  <span style={{ fontSize: '0.88rem' }}>{m.content}</span>
+                  <span style={{ fontSize: '0.88rem', wordBreak: 'break-word', overflowWrap: 'anywhere', minWidth: 0, flex: 1 }}>{m.content}</span>
                   <span
                     style={{
                       fontSize: '0.7rem',
@@ -139,6 +141,7 @@ export default function MemoryModal({ isOpen, onClose }) {
                       background: 'rgba(255, 255, 255, 0.05)',
                       color: 'var(--text-dim)',
                       textTransform: 'uppercase',
+                      flexShrink: 0,
                     }}
                   >
                     {m.category}

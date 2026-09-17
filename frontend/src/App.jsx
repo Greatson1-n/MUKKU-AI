@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Bot, Trash2, Sliders, Volume2 } from 'lucide-react';
+import { Bot, Trash2, Sliders, Volume2, Menu } from 'lucide-react';
 import {
   apiConversations,
   apiOllama,
@@ -46,6 +46,7 @@ export default function App() {
   const [isMemoryOpen, setIsMemoryOpen] = useState(false);
   const [isDocumentsOpen, setIsDocumentsOpen] = useState(false);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
   const abortControllerRef = useRef(null);
   const messagesEndRef = useRef(null);
@@ -152,6 +153,7 @@ export default function App() {
 
   const selectConversation = async (id) => {
     if (streaming) return;
+    setIsMobileSidebarOpen(false);
     setCurrentId(id);
     try {
       const detail = await apiConversations.get(id);
@@ -163,6 +165,7 @@ export default function App() {
 
   const handleNewChat = () => {
     if (streaming) return;
+    setIsMobileSidebarOpen(false);
     setCurrentId(null);
     setMessages([]);
     setInput('');
@@ -375,6 +378,14 @@ export default function App() {
 
   return (
     <div className="app-container">
+      {/* Mobile Backdrop */}
+      {isMobileSidebarOpen && (
+        <div
+          className="sidebar-backdrop"
+          onClick={() => setIsMobileSidebarOpen(false)}
+        />
+      )}
+
       {/* Left Sidebar */}
       <Sidebar
         conversations={conversations}
@@ -389,6 +400,8 @@ export default function App() {
         onOpenDocuments={() => setIsDocumentsOpen(true)}
         onOpenAuth={() => setIsAuthOpen(true)}
         currentUser={currentUser}
+        isOpen={isMobileSidebarOpen}
+        onClose={() => setIsMobileSidebarOpen(false)}
       />
 
       {/* Main Area */}
@@ -396,6 +409,14 @@ export default function App() {
         {/* Top Nav */}
         <header className="top-nav">
           <div className="nav-left">
+            <button
+              className="mobile-menu-btn"
+              onClick={() => setIsMobileSidebarOpen(true)}
+              aria-label="Open conversation menu"
+              title="Menu"
+            >
+              <Menu size={20} />
+            </button>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '0.92rem' }}>
               <Bot size={18} style={{ color: 'var(--accent-primary)' }} />
               <span>{settings?.ollama_model || 'qwen2.5:3b'}</span>

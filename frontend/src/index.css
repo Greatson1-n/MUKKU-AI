@@ -58,6 +58,14 @@
   --text-dim: #94a3b8;
 }
 
+html {
+  height: 100%;
+  height: 100dvh;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -70,16 +78,24 @@ body {
   font-family: var(--font-sans);
   line-height: 1.6;
   overflow: hidden;
+  overflow-x: hidden;
+  height: 100%;
   height: 100vh;
-  width: 100vw;
+  height: 100dvh;
+  width: 100%;
+  max-width: 100%;
   -webkit-font-smoothing: antialiased;
 }
 
 #root {
   display: flex;
+  height: 100%;
   height: 100vh;
-  width: 100vw;
+  height: 100dvh;
+  width: 100%;
+  max-width: 100%;
   overflow: hidden;
+  overflow-x: hidden;
 }
 
 /* Custom Scrollbar */
@@ -101,10 +117,27 @@ body {
 /* Layout */
 .app-container {
   display: flex;
-  width: 100vw;
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
   height: 100vh;
+  height: 100dvh;
   position: relative;
   background: radial-gradient(circle at 50% 0%, rgba(16, 185, 129, 0.05), transparent 60%);
+  overflow: hidden;
+  overflow-x: hidden;
+}
+
+.mobile-menu-btn {
+  display: none;
+}
+
+.sidebar-close-mobile-btn {
+  display: none;
+}
+
+.sidebar-backdrop {
+  display: none;
 }
 
 /* Sidebar */
@@ -323,6 +356,7 @@ body {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-width: 0;
   position: relative;
   background: var(--bg-main);
   overflow: hidden;
@@ -544,6 +578,8 @@ body {
   display: flex;
   flex-direction: column;
   max-width: 82%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .message-row.user .message-body {
@@ -557,6 +593,10 @@ body {
   line-height: 1.65;
   position: relative;
   word-break: break-word;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .message-row.user .message-bubble {
@@ -679,10 +719,14 @@ body {
 }
 
 .message-bubble table {
+  display: block;
   width: 100%;
+  max-width: 100%;
   border-collapse: collapse;
   margin: 12px 0;
   font-size: 0.88rem;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .message-bubble th, .message-bubble td {
@@ -704,6 +748,27 @@ body {
   border-radius: 4px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   color: #38bdf8;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.markdown-content {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.markdown-content a {
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+
+.markdown-content img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-sm);
 }
 
 /* Code Block Component */
@@ -713,6 +778,9 @@ body {
   background: #0d1117;
   border: 1px solid rgba(255, 255, 255, 0.1);
   overflow: hidden;
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .code-block-header {
@@ -1039,4 +1107,485 @@ body {
 
 .btn-secondary:hover {
   background: var(--bg-surface-active);
+}
+
+/* ==========================================================================
+   Mobile & Tablet Responsive Styles (<= 768px)
+   ========================================================================== */
+
+@media (max-width: 768px) {
+  /* Layout & Mobile Off-canvas Drawer */
+  .mobile-menu-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-main);
+    border-radius: var(--radius-sm);
+    width: 42px;
+    height: 42px;
+    min-width: 42px;
+    min-height: 42px;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.15s ease;
+    touch-action: manipulation;
+  }
+
+  .mobile-menu-btn:hover,
+  .mobile-menu-btn:active {
+    background: rgba(255, 255, 255, 0.15);
+    color: var(--accent-primary);
+  }
+
+  .sidebar-close-mobile-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.08);
+    border: none;
+    color: var(--text-muted);
+    border-radius: var(--radius-sm);
+    width: 38px;
+    height: 38px;
+    min-width: 38px;
+    min-height: 38px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    touch-action: manipulation;
+  }
+
+  .sidebar-close-mobile-btn:hover,
+  .sidebar-close-mobile-btn:active {
+    background: rgba(255, 255, 255, 0.16);
+    color: var(--text-main);
+  }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.72);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    z-index: 95;
+    animation: fadeIn 0.2s ease-out;
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 85vw;
+    max-width: 320px;
+    min-width: 0;
+    height: 100%;
+    height: 100dvh;
+    z-index: 100;
+    transform: translateX(-100%);
+    visibility: hidden;
+    pointer-events: none;
+    transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1), visibility 0.28s ease;
+    box-shadow: 6px 0 30px rgba(0, 0, 0, 0.75);
+    border-right: 1px solid rgba(255, 255, 255, 0.12);
+    background: var(--bg-sidebar);
+  }
+
+  .sidebar.open {
+    transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
+  }
+
+  /* Touch-friendly sidebar controls */
+  .new-chat-btn {
+    min-height: 42px;
+    padding: 10px 14px;
+    touch-action: manipulation;
+  }
+
+  .conversation-item {
+    min-height: 42px;
+    padding: 10px 12px;
+    touch-action: manipulation;
+  }
+
+  .conversation-item .conv-actions {
+    display: flex;
+    opacity: 0.85;
+  }
+
+  .conv-actions .icon-btn-xs {
+    padding: 6px;
+    min-width: 28px;
+    min-height: 28px;
+  }
+
+  .footer-nav-btn {
+    min-height: 42px;
+    padding: 10px 12px;
+    touch-action: manipulation;
+  }
+
+  /* Main Chat Area */
+  .main-chat {
+    width: 100%;
+    max-width: 100%;
+    flex: 1 1 100%;
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  /* Top Navigation */
+  .top-nav {
+    height: 54px;
+    min-height: 54px;
+    padding: 0 12px;
+    gap: 8px;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .nav-left {
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+  }
+
+  .nav-left span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 0.88rem !important;
+  }
+
+  .tool-banner {
+    max-width: 140px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 0.74rem;
+    padding: 4px 10px;
+    flex-shrink: 1;
+  }
+
+  .nav-right {
+    flex-shrink: 0;
+  }
+
+  .nav-right .icon-btn-xs {
+    min-width: 36px;
+    min-height: 36px;
+    padding: 8px;
+    touch-action: manipulation;
+  }
+
+  /* Messages & Chat Area */
+  .messages-container {
+    padding: 14px 10px;
+    gap: 16px;
+    max-width: 100%;
+    width: 100%;
+    box-sizing: border-box;
+    overflow-x: hidden;
+  }
+
+  .message-row {
+    gap: 8px;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+
+  .message-avatar {
+    width: 30px;
+    height: 30px;
+    min-width: 30px;
+    min-height: 30px;
+    font-size: 0.78rem;
+    flex-shrink: 0;
+  }
+
+  .message-body {
+    max-width: calc(100% - 38px);
+    min-width: 0;
+    box-sizing: border-box;
+  }
+
+  .message-bubble {
+    padding: 10px 14px;
+    font-size: 0.92rem;
+    line-height: 1.55;
+    border-radius: 14px;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+
+  .message-actions {
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+
+  .msg-action-btn {
+    padding: 5px 8px;
+    font-size: 0.72rem;
+    min-height: 28px;
+    touch-action: manipulation;
+  }
+
+  /* Welcome Screen */
+  .welcome-screen {
+    padding: 16px 8px;
+    max-width: 100%;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .welcome-logo {
+    width: 52px;
+    height: 52px;
+    margin-bottom: 12px;
+  }
+
+  .welcome-title {
+    font-size: clamp(1.5rem, 5vw, 1.85rem);
+    margin-bottom: 6px;
+  }
+
+  .welcome-subtitle {
+    font-size: 0.88rem;
+    margin-bottom: 20px;
+    line-height: 1.4;
+  }
+
+  .prompt-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .prompt-card {
+    padding: 14px;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    word-break: break-word;
+    touch-action: manipulation;
+  }
+
+  .prompt-card-header {
+    font-size: 0.9rem;
+  }
+
+  .prompt-card-desc {
+    font-size: 0.8rem;
+    line-height: 1.45;
+  }
+
+  /* Input Area */
+  .input-area-container {
+    padding: 6px 10px 10px;
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+    max-width: 100%;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .input-box-wrapper {
+    padding: 10px 12px;
+    border-radius: 16px;
+    gap: 8px;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .chat-textarea {
+    font-size: 16px; /* Prevents auto-zoom on mobile */
+    line-height: 1.45;
+    min-height: 24px;
+    max-height: 120px;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .input-actions-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .input-toggles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .toggle-chip {
+    padding: 6px 10px;
+    font-size: 0.74rem;
+    min-height: 34px;
+    gap: 5px;
+    touch-action: manipulation;
+    white-space: nowrap;
+  }
+
+  .input-buttons {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+
+  .circle-btn, .send-btn, .stop-btn {
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    min-height: 40px;
+    touch-action: manipulation;
+  }
+
+  /* Modals */
+  .modal-backdrop {
+    padding: 10px;
+    align-items: flex-end;
+    box-sizing: border-box;
+  }
+
+  .modal-content {
+    padding: 18px 16px;
+    max-width: 100%;
+    width: 100%;
+    max-height: 88vh;
+    max-height: 88dvh;
+    border-radius: 20px 20px 10px 10px;
+    box-sizing: border-box;
+    overflow-x: hidden;
+  }
+
+  .modal-title {
+    font-size: 1.15rem;
+  }
+
+  .form-input, .form-select, .form-textarea {
+    font-size: 16px; /* Prevents iOS auto-zoom */
+  }
+}
+
+/* ==========================================================================
+   Small Mobile Devices (<= 480px)
+   ========================================================================== */
+
+@media (max-width: 480px) {
+  .top-nav {
+    padding: 0 8px;
+  }
+
+  .messages-container {
+    padding: 12px 8px;
+    gap: 12px;
+  }
+
+  .message-body {
+    max-width: calc(100% - 36px);
+  }
+
+  .message-bubble {
+    padding: 9px 12px;
+    font-size: 0.88rem;
+  }
+
+  .input-area-container {
+    padding: 4px 8px 8px;
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+  }
+
+  .input-box-wrapper {
+    padding: 8px 10px;
+    border-radius: 14px;
+  }
+
+  .toggle-chip {
+    padding: 5px 8px;
+    font-size: 0.72rem;
+    min-height: 32px;
+  }
+
+  .circle-btn, .send-btn, .stop-btn {
+    width: 38px;
+    height: 38px;
+    min-width: 38px;
+    min-height: 38px;
+  }
+
+  .input-actions-bar {
+    gap: 6px;
+  }
+}
+
+/* ==========================================================================
+   Ultra-narrow Mobile Devices (<= 360px, e.g. 320px)
+   ========================================================================== */
+
+@media (max-width: 360px) {
+  .welcome-title {
+    font-size: 1.35rem;
+  }
+
+  .welcome-subtitle {
+    font-size: 0.82rem;
+  }
+
+  .top-nav {
+    padding: 0 6px;
+  }
+
+  .mobile-menu-btn {
+    width: 38px;
+    height: 38px;
+    min-width: 38px;
+    min-height: 38px;
+  }
+
+  .tool-banner {
+    display: none; /* Hide tool banner on <= 360px top bar to keep layout intact */
+  }
+
+  .toggle-chip span {
+    font-size: 0.68rem;
+  }
+
+  .toggle-chip {
+    padding: 4px 6px;
+  }
+
+  .circle-btn, .send-btn, .stop-btn {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    min-height: 36px;
+  }
+
+  .sidebar {
+    width: 90vw;
+  }
 }
